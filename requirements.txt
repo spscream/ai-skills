@@ -1,0 +1,4 @@
+rapidfuzz>=3.0
+requests
+feedparser
+pyyaml

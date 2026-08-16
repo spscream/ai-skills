@@ -1,0 +1,28 @@
+# Mind Skills — shared example config.
+# Copy to config.yaml (or pass --config) per skill.
+# All fields optional; defaults live in each script.
+
+# ---- ai-daily ----
+feeds:
+  - name: TechCrunch AI
+    url: https://techcrunch.com/category/artificial-intelligence/feed/
+  - name: HN LLM
+    url: https://hnrss.org/newest?q=LLM
+full_ai_feeds: ["TechCrunch AI", "HN LLM"]
+max_hours: 48
+crawl_max_chars: 1600
+max_crawl: 14
+max_results: 40
+
+# ---- trending-skills ----
+queries:
+  - {"q": "claude code skills trending", "domain": "github.com"}
+  - {"q": "cursor rules file trending github", "domain": "github.com"}
+  - {"q": "claude code MCP server new", "domain": null}
+days: 7
+github_topics: ["claude-code-skills", "cursor-rules", "agents-md", "mcp-server"]
+github_max: 10
+
+# ---- shared ----
+db_path: ./seen.db
+tavily_api_key_env: TAVILY_API_KEY
