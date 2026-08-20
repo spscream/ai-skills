@@ -1,38 +1,49 @@
 # ai-skills
 
-A personal collection of **stateless skills for Claude Code** (and any agent with a tool loop): each skill fetches fresh, deduplicated content and hands the assembly to the LLM.
+A personal collection of **skills for Claude Code** (and any agent with a tool loop).
 
-The pattern is "stateless collector script + LLM editor", with **fuzzy dedup built into the scripts** via [RapidFuzz](https://pypi.org/project/rapidfuzz/) — near-duplicate headlines / repeated items between runs are suppressed before they ever reach the model.
+The skills differ in kind. Some collect fresh content. Some drive other tools or other models.
+What they share is the split: **a stateless script does the mechanical work, and the agent writes
+the result**. The script never formats prose, and the agent never scrapes or polls by hand.
 
-New skills get added as folders under [`skills/`](skills/), each bundling its own `SKILL.md` + `scripts/`.
-
-Not every skill collects content. [`consensus`](skills/consensus) follows the same split for a different
-job: a stateless bash script polls models from several vendors, and the agent writes the synthesis.
-It needs no API key — it drives the `claude` and `agent` CLIs on their own subscriptions.
+Each skill is a folder under [`skills/`](skills/) with its own `SKILL.md` and `scripts/`.
+Copy the folder you want into your agent's skills directory. Nothing else in this repo is needed
+at runtime.
 
 ## Skills
 
-| Skill | What it fetches | Source |
-|-------|-----------------|--------|
-| [`ai-daily`](skills/ai-daily) | AI industry news, filtered to AI-relevant items | RSS feeds |
-| [`trending-skills`](skills/trending-skills) | Fresh (last 7 days) Claude Code / Cursor skills, agents, rules, MCP servers | Tavily search + GitHub API |
-| [`consensus`](skills/consensus) | Answers of several vendors' models to one question, and their disagreements | Claude Code + Cursor CLI subscriptions |
+| Skill | Kind | What it does | Needs |
+|-------|------|--------------|-------|
+| [`ai-daily`](skills/ai-daily) | collector | AI-industry news from RSS, filtered to AI-relevant items, deduplicated against earlier runs | Python |
+| [`trending-skills`](skills/trending-skills) | collector | Claude Code / Cursor skills, agents, rules and MCP servers from the last 7 days | Python, Tavily key, GitHub API |
+| [`consensus`](skills/consensus) | panel | Asks one question to models from several vendors in two rounds, and keeps their disagreements | bash, jq, `claude` and `agent` CLIs |
 
 ## Installation
+
+Install what the skill you copied needs.
+
+The collectors need Python packages:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-Copy one skill folder (e.g. `skills/ai-daily`) into your agent's skills directory. Each skill bundles its own `SKILL.md` and `scripts/`.
+The `consensus` panel needs no Python and no API key. It needs `jq`, the `claude` CLI, and the
+Cursor CLI (`agent login`). It runs both on their own subscription.
 
 ## Adding a new skill
 
-1. Create a folder `skills/<name>/` with a `SKILL.md` (description, usage, config) and a `scripts/` collector.
-2. If it needs fuzzy dedup, reuse [`shared/dedup.py`](shared/dedup.py).
-3. Commit and push — the repo is built to grow as a collection.
+1. Create the folder `skills/<name>/`. Put a `SKILL.md` and a `scripts/` directory in it.
+2. Give `SKILL.md` YAML frontmatter with `name` and `description`. The `name` must equal the
+   folder name, in lowercase and hyphens. The test suite checks this.
+3. Keep the script stateless. Let it print structured material. Let the agent write the prose.
+4. Use no machine-specific paths. Take configuration from `config.yaml`, from flags, or from
+   environment variables.
+5. Run the tests. Then commit and push. The repo is built to grow as a collection.
 
-## Design philosophy
+If the new skill collects content and needs fuzzy dedup, reuse [`shared/dedup.py`](shared/dedup.py).
+
+## Content collectors
 
 ```
 ┌─────────────────────────────────────────────┐
@@ -51,15 +62,35 @@ Copy one skill folder (e.g. `skills/ai-daily`) into your agent's skills director
  └─────────────────────────────────────────────┘
 ```
 
-Each script is **stateless and idempotent**: it reads a small SQLite "seen" DB, marks what it printed, and on the next run returns only genuinely new items. Stdout is structured as two blocks (`СТАТЬИ` metadata + `СОДЕРЖАНИЕ` content) that the LLM consumes to write the final post.
+Each collector is **stateless and idempotent**: it reads a small SQLite "seen" database, marks
+what it printed, and on the next run returns only genuinely new items. Stdout carries two blocks
+(`СТАТЬИ` metadata and `СОДЕРЖАНИЕ` content) that the LLM turns into the final post.
 
-## Why dedup lives in the script
+### Why dedup lives in the script
 
-A collector that only does exact-hash dedup lets near-duplicates through (same incident with reworded titles). These scripts use RapidFuzz `partial_ratio` (threshold ~65) **plus** exact hash, with a token-overlap fallback when RapidFuzz is unavailable — so rewrites like "OpenAI launched GPT-5" vs "OpenAI releases GPT-5, all details" collapse into one item.
+A collector that does exact-hash dedup only lets near-duplicates through: the same incident under
+a reworded title. These scripts use RapidFuzz `partial_ratio` (threshold ~65) **plus** the exact
+hash, with a token-overlap fallback when RapidFuzz is absent. So "OpenAI launched GPT-5" and
+"OpenAI releases GPT-5, all details" collapse into one item.
 
-## Config
+## Model panel
 
-All paths / sources are configurable via a small `config.yaml` (or env vars) at the top of each script — no hardcoded machine paths.
+[`consensus`](skills/consensus) sends one question to models from different vendors. Round one
+collects independent answers. Round two shows each model the other answers with the names removed,
+and asks it to revise. The script prints the material and stops there; the agent writes the
+synthesis and keeps the disagreements, because agreement between models is not proof.
+
+Both harnesses run read-only. Claude runs without `Edit`, `Write` and `Bash`. Cursor runs with
+`--mode ask`.
+
+## Tests
+
+```bash
+python -m pytest tests/ -v
+```
+
+The suite checks the pure functions of the collectors, the dedup helper, and the frontmatter of
+every `SKILL.md` against the Agent Skills spec. CI runs it on Python 3.11, 3.12 and 3.13.
 
 ## License
 
