@@ -78,6 +78,10 @@ if [[ -n "$OUTDIR" ]]; then
 else
   WORK="$(mktemp -d -t consensus-XXXXXX)"
 fi
+# Путь обязан стать абсолютным здесь. Участники запускаются после `cd` в рабочий каталог,
+# и относительный путь из -o после этого указывает не туда: редирект падает, ответы теряются.
+WORK="$(cd "$WORK" && pwd)"
+
 mkdir -p "$WORK/r1" "$WORK/r2" "$WORK/context"
 
 for f in "${CONTEXT_FILES[@]:-}"; do
