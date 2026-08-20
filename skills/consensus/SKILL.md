@@ -4,7 +4,7 @@ description: Use when a decision is expensive to reverse and one model's answer 
 license: MIT
 metadata:
   author: Alexander Malaev
-  version: "0.1.1"
+  version: "0.1.2"
 ---
 
 # Consensus of several models

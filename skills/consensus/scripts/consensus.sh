@@ -68,6 +68,20 @@ if [[ -z "$QUESTION" ]]; then
   exit 2
 fi
 
+# Предохранитель от рекурсии.
+#
+# Сейчас участник и так не может запустить панель: у claude нет Bash, а cursor идёт в режиме ask,
+# где выполнение команд запрещено. Обе проверки сделаны прогоном. Но обе держатся на одной строке
+# флагов ниже. Если её ослабить, вложенный запуск размножит вызовы: три участника дают девять
+# прогонов на втором уровне и двадцать семь на третьем.
+#
+# Переменная наследуется любым дочерним процессом, поэтому вложенный запуск умрёт сразу.
+if [[ -n "${CONSENSUS_DEPTH:-}" ]]; then
+  echo "consensus.sh: вложенный запуск панели запрещён (CONSENSUS_DEPTH=$CONSENSUS_DEPTH)" >&2
+  exit 3
+fi
+export CONSENSUS_DEPTH=1
+
 export PATH="$HOME/.local/bin:$PATH"
 
 # Рабочий каталог отдельный: в неинтерактивном режиме обе обвязки имеют доступ на запись.
@@ -214,6 +228,7 @@ if [[ "$ROUNDS" -ge 2 ]]; then
       echo "2. Name each point where you disagree. Give the basis of your disagreement."
       echo "3. Give your final answer."
       echo "Do not agree only to agree. A disagreement with a reason beats a common opinion."
+      echo "Do not run consensus.sh. Do not start a second panel. Recursion is not permitted here."
       echo "Write your answer in the language of the question."
       echo
       echo "=== QUESTION ==="
