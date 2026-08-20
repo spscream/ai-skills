@@ -6,12 +6,17 @@ The pattern is "stateless collector script + LLM editor", with **fuzzy dedup bui
 
 New skills get added as folders under [`skills/`](skills/), each bundling its own `SKILL.md` + `scripts/`.
 
+Not every skill collects content. [`consensus`](skills/consensus) follows the same split for a different
+job: a stateless bash script polls models from several vendors, and the agent writes the synthesis.
+It needs no API key — it drives the `claude` and `agent` CLIs on their own subscriptions.
+
 ## Skills
 
 | Skill | What it fetches | Source |
 |-------|-----------------|--------|
 | [`ai-daily`](skills/ai-daily) | AI industry news, filtered to AI-relevant items | RSS feeds |
 | [`trending-skills`](skills/trending-skills) | Fresh (last 7 days) Claude Code / Cursor skills, agents, rules, MCP servers | Tavily search + GitHub API |
+| [`consensus`](skills/consensus) | Answers of several vendors' models to one question, and their disagreements | Claude Code + Cursor CLI subscriptions |
 
 ## Installation
 
