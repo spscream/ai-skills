@@ -52,6 +52,12 @@ Set the Bash timeout to 900000 ms or more. Run `-h` for the flags and the defaul
 - `claude` — the Claude Code CLI, for a `claude:` participant.
 - `agent` — the Cursor CLI, for a `cursor:` participant. Log in with `agent login`.
 - `jq` — the script reads the Cursor answer from JSON with it.
+- `timeout` or `gtimeout` — optional. Without either one the model calls run with no time
+  limit and the script says so on stderr. macOS ships neither until `brew install coreutils`.
+
+A participant whose CLI is missing gets no answer, and the script says so for that participant
+only. A panel of one harness is legitimate: `-m claude:fable -r 1` is a single reader with
+read-only access to the repository, which is an audit rather than a consensus.
 
 Both CLIs run on their own subscription. The panel needs no API key.
 The Cursor model ids depend on the account. List your own with `agent models`.

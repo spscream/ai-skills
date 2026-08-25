@@ -84,6 +84,29 @@ export CONSENSUS_DEPTH=1
 
 export PATH="$HOME/.local/bin:$PATH"
 
+# `timeout` есть не везде. На macOS его нет ни под этим именем, ни под `gtimeout`,
+# пока не поставлен coreutils. Голый вызов давал бы код 127 на каждом участнике, а
+# обработчик ошибок ниже написал бы «участник не ответил» — то есть отказ среды
+# выглядел бы как отказ моделей, и панель молча возвращала бы пустой материал.
+# Поэтому обёртка выбирается один раз, и её отсутствие — предупреждение, не отказ.
+TIMEOUT_CMD=""
+if command -v timeout >/dev/null 2>&1; then
+  TIMEOUT_CMD="timeout"
+elif command -v gtimeout >/dev/null 2>&1; then
+  TIMEOUT_CMD="gtimeout"
+else
+  echo "consensus.sh: ни timeout, ни gtimeout не найдены — вызовы моделей идут без ограничения по времени (macOS: brew install coreutils)" >&2
+fi
+
+# Запуск с ограничением по времени, если оно доступно, и без него, если нет.
+run_limited() {
+  if [[ -n "$TIMEOUT_CMD" ]]; then
+    "$TIMEOUT_CMD" "$TIMEOUT" "$@"
+  else
+    "$@"
+  fi
+}
+
 # Рабочий каталог отдельный: в неинтерактивном режиме обе обвязки имеют доступ на запись.
 # Пусть пишут сюда, а не в репозиторий.
 if [[ -n "$OUTDIR" ]]; then
@@ -134,7 +157,7 @@ ask() {
     claude)
       # Только чтение: Edit, Write и Bash не выданы, поэтому запись отклоняется правами.
       # Промпт идёт через stdin: --allowedTools забирает все следующие аргументы как имена инструментов.
-      timeout "$TIMEOUT" claude -p --model "$model" --allowedTools "Read Grep Glob" \
+      run_limited claude -p --model "$model" --allowedTools "Read Grep Glob" \
         < "$prompt_file" > "$out_file" 2> "$out_file.err"
       rc=$?
       ;;
@@ -142,7 +165,7 @@ ask() {
       # --mode ask — режим только для чтения. Он обязателен: проверено, что без него
       # `-p --sandbox enabled` спокойно создаёт файлы в рабочем каталоге.
       # --trust снимает вопрос про доверие к каталогу.
-      timeout "$TIMEOUT" agent -p --mode ask --model "$model" --trust --sandbox enabled \
+      run_limited agent -p --mode ask --model "$model" --trust --sandbox enabled \
         --output-format json "$(cat "$prompt_file")" \
         > "$out_file.json" 2> "$out_file.err"
       rc=$?
