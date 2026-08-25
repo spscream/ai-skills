@@ -1,4 +1,4 @@
-# Mind Skills — shared example config.
+# ai-skills — shared example config.
 # Copy to config.yaml (or pass --config) per skill.
 # All fields optional; defaults live in each script.
 

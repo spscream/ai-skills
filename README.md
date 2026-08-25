@@ -8,13 +8,15 @@ the result**. The script never formats prose, and the agent never scrapes or pol
 
 Each skill is a folder under [`skills/`](skills/) with its own `SKILL.md` and `scripts/`.
 Copy the folder you want into your agent's skills directory. Nothing else in this repo is needed
-at runtime.
+at runtime: a skill that shares code carries its own copy, and
+[`tests/test_standalone_skill.py`](tests/test_standalone_skill.py) runs every skill from a copied
+folder to keep that promise true.
 
 ## Skills
 
 | Skill | Kind | What it does | Needs |
 |-------|------|--------------|-------|
-| [`ai-daily`](skills/ai-daily) | collector | AI-industry news from RSS, filtered to AI-relevant items, deduplicated against earlier runs | Python |
+| [`ai-daily`](skills/ai-daily) | collector | AI-industry news from RSS, filtered to AI-relevant items, deduplicated against earlier runs. The default feeds and keywords cover Russian and English; change `feeds` and `ai_keywords` in the config for another language | Python |
 | [`trending-skills`](skills/trending-skills) | collector | Claude Code / Cursor skills, agents, rules and MCP servers from the last 7 days | Python, Tavily key, GitHub API |
 | [`consensus`](skills/consensus) | panel | Asks one question to models from several vendors in two rounds, and keeps their disagreements | bash, jq, `claude` and `agent` CLIs |
 
@@ -41,7 +43,11 @@ Cursor CLI (`agent login`). It runs both on their own subscription.
    environment variables.
 5. Run the tests. Then commit and push. The repo is built to grow as a collection.
 
-If the new skill collects content and needs fuzzy dedup, reuse [`shared/dedup.py`](shared/dedup.py).
+If the new skill collects content and needs fuzzy dedup, take
+[`shared/dedup.py`](shared/dedup.py) — but **copy it into the skill's own `scripts/`** and import
+it from there. `shared/` is the source, not a runtime dependency: a skill that imports it from the
+repository root stops working the moment its folder is copied out. The test suite compares each
+copy with the source byte for byte, so edit `shared/dedup.py` and copy it over the others.
 
 ## Content collectors
 

@@ -14,12 +14,12 @@ import time
 import urllib.parse
 import urllib.request
 
-# allow running from anywhere: make repo-root `shared/` importable
+# The skill folder is self-contained: dedup.py sits next to this script, so copying
+# `skills/trending-skills/` alone gives a working skill. The source of that file is
+# `shared/dedup.py` in the repository, and a test keeps the two byte-identical.
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_ROOT = os.path.abspath(os.path.join(_HERE, "..", "..", ".."))
-sys.path.insert(0, _ROOT)
-from shared import dedup  # noqa: E402
-from shared.dedup import is_dup, title_hash  # noqa: E402
+sys.path.insert(0, _HERE)
+from dedup import is_dup, title_hash  # noqa: E402
 
 DEFAULT_CONFIG = {
     "queries": [
