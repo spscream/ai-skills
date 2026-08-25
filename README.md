@@ -1,6 +1,7 @@
 # ai-skills
 
-A personal collection of **skills for Claude Code** (and any agent with a tool loop).
+A personal collection of **skills for Claude Code** (and any agent with a tool loop —
+they are used through Cursor and Hermes too).
 
 The skills differ in kind. Some collect fresh content. Some drive other tools or other models.
 What they share is the split: **a stateless script does the mechanical work, and the agent writes
