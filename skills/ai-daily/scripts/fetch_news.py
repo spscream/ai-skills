@@ -73,7 +73,7 @@ DEFAULT_CONFIG = {
         "generative", "inference", "chatbot", "deepfake", "drone",
         "self-driving", "driverless", "autonomous vehicle",
         "large language model", "foundation model",
-        "image gen", "дипфейк", "беспилотник",
+        "image gen", "imagegen", "дипфейк", "беспилотник",
         # компании и лаборатории
         "openai", "anthropic", "антропик", "deepmind", "mistral", "midjourney",
         "nvidia", "huggingface", "hugging face", "perplexity", "elevenlabs",
