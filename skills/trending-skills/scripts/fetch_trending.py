@@ -4,7 +4,6 @@ trending-skills — fetch fresh (7-day) Claude Code / Cursor skills, agents, rul
 MCP servers via Tavily; dedup; output two blocks for the LLM editor.
 """
 import argparse
-import hashlib
 import json
 import os
 import re
@@ -52,20 +51,29 @@ DEFAULT_CONFIG = {
 }
 
 
+def warn(msg):
+    """Отказ среды обязан быть слышен: stdout занят материалом, поэтому stderr."""
+    print(f"fetch_trending: {msg}", file=sys.stderr)
+
+
 def load_config(path):
     cfg = dict(DEFAULT_CONFIG)
     if path and os.path.isfile(path):
         try:
             import yaml
             cfg.update(yaml.safe_load(open(path)) or {})
-        except Exception:
-            pass
+        except Exception as e:
+            # Раньше здесь был pass: опечатка в YAML откатывала конфиг к
+            # умолчаниям целиком, включая db_path, и база дедупа незаметно
+            # расщеплялась надвое.
+            warn(f"конфиг {path} не прочитан ({e}), работаю на умолчаниях")
     return cfg
 
 
 def tavily_search(query, domain, days, cfg):
     key = os.environ.get(cfg["tavily_api_key_env"], "")
     if not key:
+        warn(f"нет ключа в {cfg['tavily_api_key_env']} — поиск Tavily пропущен")
         return []
     body = {"api_key": key, "query": query, "search_depth": "basic",
             "max_results": 8, "days": days}
@@ -77,7 +85,8 @@ def tavily_search(query, domain, days, cfg):
         d = json.loads(urllib.request.urlopen(req, timeout=40).read().decode())
         return [(r.get("title") or "", r.get("url") or "", r.get("content") or "")
                 for r in d.get("results", [])]
-    except Exception:
+    except Exception as e:
+        warn(f"запрос Tavily {query!r} не выполнен: {e}")
         return []
 
 
@@ -101,7 +110,8 @@ def github_search(topic, days, cfg):
             title = f"{i.get('full_name','')}: {(i.get('description') or '').strip()[:90]}"
             out.append((title, i.get("html_url") or "", ""))
         return out
-    except Exception:
+    except Exception as e:
+        warn(f"поиск GitHub по теме {topic!r} не выполнен: {e}")
         return []
 
 
@@ -173,15 +183,22 @@ def main():
         new_known.add(h)
         new_titles.append(title)
         out.append((title, url))
-        remember(cur, title, dry_run=args.dry_run, now_ts=now_add)
-    if not args.dry_run:
-        c.commit()
 
     if not out:
         print("(нет свежих новых навыков/агентов за окно)")
         return
 
+    # Обрезать ДО записи, а не после. Отметить прочитанным можно только то, что
+    # уходит читателю: помеченный, но не напечатанный элемент не попадёт уже
+    # ни в один прогон — он исчезает молча. Здесь это особенно заметно: девять
+    # запросов по восемь результатов плюс пять тем по десять дают до 122
+    # кандидатов при max_results 24.
     out = out[:cfg["max_results"]]
+    for title, _url in out:
+        remember(cur, title, dry_run=args.dry_run, now_ts=now_add)
+    if not args.dry_run:
+        c.commit()
+
     print("СТАТЬИ (заголовок | источник | url):")
     for title, url in out:
         print(f"{title} | {source_of(url)} | {url}")

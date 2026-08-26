@@ -40,3 +40,40 @@ def test_is_ai_keyword_match():
 def test_is_ai_non_relevant_false():
     cfg = fetch_news.load_config("/x/none")
     assert fetch_news.is_ai("Football transfer news today", "BBC Sport", cfg) is False
+
+# --- is_ai must match whole words, not substrings -----------------------
+
+@pytest.mark.parametrize("headline", [
+    "Ukraine peace talks continue",        # ai inside Ukr-ai-ne
+    "Email marketing tips for 2026",       # ai inside Em-ai-l
+    "Supply chain disruption in Asia",     # ai inside ch-ai-n
+    "Kremlin said nothing new",            # ai inside s-ai-d
+    "Air travel demand rebounds",          # ai at the head of Air
+    "Aid convoy reaches the border",       # ai at the head of Aid
+    "Ремоделирование зданий подорожало",   # модел inside ре-модел-ирование
+    "Football transfer news today",
+])
+def test_is_ai_rejects_substring_lookalikes(headline):
+    cfg = fetch_news.load_config("/x/none")
+    assert fetch_news.is_ai(headline, "BBC Tech", cfg) is False
+
+
+@pytest.mark.parametrize("headline", [
+    "New LLM model released",
+    "OpenAI ships an update",
+    "GPT-5 tops the benchmark",
+    "Российские банки внедряют нейросети",
+    "Модель научили считать",
+    "ИИ в медицине: первые итоги",
+])
+def test_is_ai_accepts_real_mentions(headline):
+    cfg = fetch_news.load_config("/x/none")
+    assert fetch_news.is_ai(headline, "BBC Tech", cfg) is True
+
+
+def test_is_ai_honours_custom_keywords(tmp_path):
+    p = tmp_path / "c.yaml"
+    p.write_text("ai_acronyms: []\nai_keywords: ['квантов']\n")
+    cfg = fetch_news.load_config(str(p))
+    assert fetch_news.is_ai("Квантовый компьютер собран", "BBC Tech", cfg) is True
+    assert fetch_news.is_ai("New LLM model released", "BBC Tech", cfg) is False

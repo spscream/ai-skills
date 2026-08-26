@@ -2,10 +2,8 @@
 requires YAML frontmatter with `name` + `description`; name matches folder
 and is lowercase+hyphens. No network needed."""
 import re
-import sys
 from pathlib import Path
 
-import pytest
 import yaml
 
 _ROOT = Path(__file__).resolve().parent.parent

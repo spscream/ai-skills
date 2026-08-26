@@ -9,6 +9,11 @@ feeds:
   - name: HN LLM
     url: https://hnrss.org/newest?q=LLM
 full_ai_feeds: ["TechCrunch AI", "HN LLM"]
+# Acronyms match as a whole word only: without that "ai" matches Ukraine,
+# email, chain, said, air, aid. Stems match at the start of a word and let the
+# ending vary, so "модел" catches "модель" but not "ремоделирование".
+ai_acronyms: ["ии", "ai", "llm", "gpt", "гпт"]
+ai_keywords: ["искусственн", "нейросет", "модел", "claude", "openai", "агент"]
 max_hours: 48
 crawl_max_chars: 1600
 max_crawl: 14

@@ -7,7 +7,6 @@ so a repeat run returns only genuinely new items. Stdout is structured for the
 LLM editor to assemble the final post.
 """
 import argparse
-import hashlib
 import json
 import os
 import re
@@ -37,8 +36,13 @@ DEFAULT_CONFIG = {
         {"name": "HN LLM", "url": "https://hnrss.org/newest?q=LLM"},
     ],
     "full_ai_feeds": {"TechCrunch AI", "HN LLM"},
+    # Акронимы: совпадают только как отдельное слово. Без правой границы "ai"
+    # ловит "aim", "aid", "air"; без левой — "Ukraine", "email", "chain", "said".
+    "ai_acronyms": ["ии", "ai", "llm", "gpt", "гпт"],
+    # Основы: правая граница свободна, чтобы ловить словоформы ("модел" ->
+    # "модель", "модели"), но левая обязательна — иначе "ремоделирование".
     "ai_keywords": [
-        "ии", "искусственн", "нейросет", "нейросеч", "ai", "llm", "модел", "гпт", "gpt",
+        "искусственн", "нейросет", "нейросеч", "модел",
         "claude", "chatgpt", "антропик", "openai", "deepseek", "алгоритм", "машинн",
         "машинное обучение", "агент", "робот", "robotics", "генеративн", "image gen",
         "дипфейк", "беспилотник",
@@ -52,33 +56,67 @@ DEFAULT_CONFIG = {
 }
 
 
+def warn(msg):
+    """Отказ среды обязан быть слышен.
+
+    Молча вернуть пустой результат нельзя: «сегодня новостей нет» и «на машине
+    нет feedparser» выглядят на stdout одинаково, и вторая причина ищется потом
+    часами. Стдаут занят материалом для редактора, поэтому предупреждения идут
+    в stderr.
+    """
+    print(f"fetch_news: {msg}", file=sys.stderr)
+
+
 def load_config(path):
     cfg = dict(DEFAULT_CONFIG)
     if path and os.path.isfile(path):
         try:
             import yaml
             cfg.update(yaml.safe_load(open(path)) or {})
-        except Exception:
-            pass
+        except Exception as e:
+            # Раньше здесь был pass: опечатка в YAML откатывала конфиг к
+            # умолчаниям целиком, включая db_path, и база дедупа незаметно
+            # расщеплялась надвое.
+            warn(f"конфиг {path} не прочитан ({e}), работаю на умолчаниях")
     return cfg
+
+
+# Буква или цифра любого из двух алфавитов. Граница слова \b здесь не годится:
+# она считает границей стык латиницы и кириллицы, так что "ai" в "айти" прошло бы.
+_W = r"[0-9a-zA-Zа-яёА-ЯЁ]"
+
+
+def _compile_matcher(cfg):
+    """Собрать один регэксп из акронимов и основ. Кэшируется в cfg."""
+    acronyms = [re.escape(str(k).lower()) for k in cfg.get("ai_acronyms", []) if str(k).strip()]
+    stems = [re.escape(str(k).lower()) for k in cfg.get("ai_keywords", []) if str(k).strip()]
+    parts = []
+    if acronyms:  # слово целиком
+        parts.append(f"(?<!{_W})(?:{'|'.join(acronyms)})(?!{_W})")
+    if stems:     # начало слова, окончание свободно
+        parts.append(f"(?<!{_W})(?:{'|'.join(stems)})")
+    return re.compile("|".join(parts)) if parts else None
 
 
 def is_ai(title, source, cfg):
     if source in cfg["full_ai_feeds"]:
         return True
-    low = " " + str(title).lower().strip() + " "
-    for k in cfg["ai_keywords"]:
-        if k.lower() in low:
-            return True
-    return False
+    rx = cfg.get("_matcher")
+    if rx is None:
+        rx = cfg["_matcher"] = _compile_matcher(cfg)
+    if rx is None:
+        return False
+    return bool(rx.search(str(title).lower()))
 
 
 def fetch_rss(url, cfg):
     if not feedparser:
+        warn("feedparser не установлен — ленты не читаются вообще (pip install feedparser)")
         return []
     try:
         d = feedparser.parse(url)
-    except Exception:
+    except Exception as e:
+        warn(f"лента {url} не прочитана: {e}")
         return []
     out = []
     for e in d.entries[:25]:
@@ -99,10 +137,6 @@ def parse_ts(pubdate):
 def crawl_tavily(url, cfg, max_chars):
     key = os.environ.get(cfg["tavily_api_key_env"], "")
     if not key:
-        return ""
-    try:
-        import yaml
-    except Exception:
         return ""
     payload = json.dumps({"api_key": key, "urls": [url]}).encode()
     req = urllib.request.Request("https://api.tavily.com/extract", data=payload,
@@ -160,24 +194,27 @@ def main():
         new_known.add(h)
         new_titles.append(title)
         date_s = time.strftime("%d.%m", time.gmtime(ts)) if ts else "?"
-        out.append(f"{title} | {source} | {date_s} | {url}")
-        remember(cur, title, dry_run=args.dry_run, now_ts=now_add)
-    if not args.dry_run:
-        c.commit()
+        out.append((title, source, date_s, url))
 
     if not out:
         print("(нет свежих новых новостей за окно)")
         return
 
+    # Обрезать ДО записи, а не после. Отметить прочитанным можно только то, что
+    # уходит читателю: помеченный, но не напечатанный элемент не попадёт уже
+    # ни в один прогон — он исчезает молча.
     lines = out[:cfg["max_results"]]
+    for title, _source, _date_s, _url in lines:
+        remember(cur, title, dry_run=args.dry_run, now_ts=now_add)
+    if not args.dry_run:
+        c.commit()
+
     print("СТАТЬИ (заголовок | источник | дата | url):")
-    for l in lines:
-        print(l)
+    for title, source, date_s, url in lines:
+        print(f"{title} | {source} | {date_s} | {url}")
     if args.crawl:
         print("\nСТАТЬИ-СОДЕРЖАНИЕ (заголовок === текст):")
-        for l in lines[:cfg["max_crawl"]]:
-            title = l.split(" | ")[0]
-            url = l.split(" | ")[-1]
+        for title, _source, _date_s, url in lines[:cfg["max_crawl"]]:
             print(f"[{title}]\n{crawl_tavily(url, cfg, cfg['crawl_max_chars'])}\n[КОНЕЦ]\n")
 
 
