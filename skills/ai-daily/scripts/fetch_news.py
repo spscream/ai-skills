@@ -105,6 +105,8 @@ DEFAULT_CONFIG = {
     "max_crawl": 14,
     "max_results": 40,
     "tavily_api_key_env": "TAVILY_API_KEY",
+    # Откуда дочитывать ключи, если их нет в окружении.
+    "env_file": "/opt/data/.env",
 }
 
 
@@ -117,6 +119,27 @@ def warn(msg):
     в stderr.
     """
     print(f"fetch_news: {msg}", file=sys.stderr)
+
+
+def api_key(name, cfg):
+    """Ключ из окружения, иначе из dotenv-файла.
+
+    Окружения одного мало. Под cron hermes подгружает ~/.hermes/.env сам, и
+    ключ виден; при запуске руками — нет, и сборщик молча уходил работать без
+    поиска, отдавая заметно меньше находок без единого слова об этом. Отличить
+    такой прогон от честного «сегодня пусто» было нечем.
+    """
+    val = os.environ.get(name, "")
+    if val:
+        return val
+    path = cfg.get("env_file") or "/opt/data/.env"
+    try:
+        for line in open(path, encoding="utf-8"):
+            if line.startswith(name + "="):
+                return line.split("=", 1)[1].strip().strip('"')
+    except OSError:
+        pass
+    return ""
 
 
 def load_config(path):
@@ -298,7 +321,7 @@ def crawl_arxiv_abs(url: str, max_chars: int = 3000) -> str:
 
 
 def crawl_tavily(url, cfg, max_chars):
-    key = os.environ.get(cfg["tavily_api_key_env"], "")
+    key = api_key(cfg["tavily_api_key_env"], cfg)
     if not key:
         return ""
     # arXiv is handled separately: the extract API brings back the page
