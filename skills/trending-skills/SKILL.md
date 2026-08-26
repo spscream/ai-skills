@@ -22,8 +22,11 @@ or MCP servers.
 ## How to Run
 
 ```bash
-python scripts/fetch_trending.py [--config config.yaml]
+python scripts/fetch_trending.py [--config config.yaml] [--dry-run] [--no-crawl]
 ```
+
+`--dry-run` prints what a real run would emit but marks nothing as seen, so you
+can look at the output without consuming the items.
 
 The script prints two blocks to stdout:
 
@@ -64,6 +67,18 @@ gh_token_env: GH_TOKEN      # optional: raises API limit 60 -> 5000 req/h
 ```
 
 Requires: `python -m pip install requests rapidfuzz pyyaml`
+
+## What the editor must do with this output
+
+Search brings back more than it should: catalogue pages, marketing, articles
+that only mention the ecosystem in passing. The collector cannot tell those from
+a real find, so filtering them out is your job.
+
+- Judge by meaning, not by the words in the title.
+- Drop anything that is not a skill, rule file, MCP server, agent or workflow
+  for Claude Code or Cursor. Say nothing about what you removed.
+- A short roundup beats a roundup with a stray item in it. Fewer finds than you
+  were aiming for is a normal outcome.
 
 ## Output format (what the LLM turns into a post)
 
