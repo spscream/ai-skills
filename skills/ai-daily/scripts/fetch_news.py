@@ -51,7 +51,16 @@ DEFAULT_CONFIG = {
         # общая лексика
         "искусственн", "нейросет", "нейросеч", "нейронк", "модел",
         "алгоритм", "машинн", "машинное обучение", "генеративн", "инференс",
-        "агент", "робот", "robotics", "чат-бот", "чатбот",
+        "агент", "робот", "чат-бот", "чатбот",
+        # Понятия по-английски. Их не было вовсе: список знал термины только
+        # по-русски, а по-английски одни бренды — при том что BBC Tech
+        # англоязычная и категорий в ней нет, то есть фильтр по словам
+        # для неё единственный. "robot" вместо "robotics": основа ловит
+        # и robots, и robotic, а "Robot horse" мимо "robotics" проходил.
+        "robot", "machine learning", "deep learning", "neural net",
+        "generative", "inference", "chatbot", "deepfake", "drone",
+        "self-driving", "driverless", "autonomous vehicle",
+        "large language model", "foundation model",
         "image gen", "дипфейк", "беспилотник",
         # компании и лаборатории
         "openai", "anthropic", "антропик", "deepmind", "mistral", "midjourney",

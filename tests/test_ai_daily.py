@@ -120,3 +120,31 @@ def test_is_ai_knows_the_vendors_and_models(headline):
 def test_is_ai_does_not_leak_on_vendor_lookalikes(headline):
     cfg = fetch_news.load_config("/x/none")
     assert fetch_news.is_ai(headline, "BBC Tech", cfg) is False
+
+
+# --- the English half of the vocabulary --------------------------------
+
+@pytest.mark.parametrize("headline", [
+    "Robot horse steals the spotlight",     # "robotics" alone used to miss this
+    "Robots on the factory floor",
+    "Machine learning cuts drug trial time",
+    "Generative video tool launches",
+    "Chatbot passes the bar exam",
+    "Deepfake scam hits a bank",
+    "Inference costs fall by half",
+    "Neural network spots tumours",
+    "Self-driving taxis expand to Austin",
+    "Driverless trucks hit the highway",
+    "Autonomous vehicle rules tighten",
+    "A new foundation model for biology",
+    "Large language model tops the leaderboard",
+    "Drone delivery starts in Texas",
+])
+def test_is_ai_covers_the_concepts_in_english_too(headline):
+    """The list held these concepts in Russian only, and brand names in English.
+
+    BBC Tech is an English feed with no categories, so the keyword filter is the
+    only thing standing in front of it -- and half the vocabulary did not apply.
+    """
+    cfg = fetch_news.load_config("/x/none")
+    assert fetch_news.is_ai(headline, "BBC Tech", cfg) is True
