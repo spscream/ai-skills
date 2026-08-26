@@ -214,10 +214,97 @@ def parse_ts(pubdate):
         return 0
 
 
+def normalize_spaces(raw: str) -> str:
+    raw = re.sub(r"[ \t]+", " ", raw)
+    raw = re.sub(r"\n{3,}", "\n\n", raw)
+    return raw.strip()
+
+
+def clean_article(raw: str) -> str:
+    """Strip navigation, footers and page furniture from a crawled article.
+
+    Conservative on purpose: it cuts only at markers that cannot appear inside
+    the text of an article, because a wrong cut loses real content silently.
+    """
+    if not raw:
+        return ""
+    # 1) Жёсткие обрезки ТОЛЬКО по однозначным футер-маркерам страницы.
+    for marker in ["## BibTeX formatted citation", "## BibTeX", "## Bibliographic and Citation",
+                   "## Submission history", "## Demos", "Recommenders and Search Tools",
+                   "arXivLabs is a framework", "Loading the next article", "Most Popular",
+                   "Related Stories", "Sign up for our newsletter", "Terms of Use", "Back to top"]:
+        idx = raw.find(marker)
+        if idx != -1:
+            raw = raw[:idx]
+    # 1b) у TechCrunch контент начинается после метки "In Brief" — сдвигаем туда старт, если она есть
+    brief = raw.find("In Brief")
+    if brief != -1:
+        raw = raw[brief:]
+    # 1c) GitHub: навигация в начале, контент это README
+    gh = raw.find("README")
+    if "github.com" in raw and gh != -1:
+        raw = raw[gh:]
+    # 2) Обрезаем слишком длинные (для страниц, где футер не найден)
+    raw = raw[:6000]
+    # 3) Схлопываем пробелы/пустые строки, убираем строки-разделители и навигацию
+    lines = []
+    for l in raw.splitlines():
+        s = l.strip()
+        if not s:
+            continue
+        # служебные GitHub/JS строки
+        if s in ("You signed in with another tab or window. Reload to refresh your session.",
+                 "You signed out in another tab or window. Reload to refresh your session.",
+                 "You switched accounts on another tab or window. Reload to refresh your session.",
+                 "Dismiss alert", "{{ message }}", "Appearance settings", "Sign in", "Sign up"):
+            continue
+        if re.fullmatch(r"[\|\-–_=·*#\s]{8,}", s):
+            continue
+        # логотип/картинки-ссылки в начале (markdown ![]) — выкидываем
+        if s.startswith("[!["):
+            continue
+        # строки-навигация/логотипы: много markdown-ссылок при малом числе букв
+        links = len(re.findall(r"\]\(|\!\[", s))
+        letters = len(re.findall(r"[A-Za-zА-Яа-я]", s))
+        if links >= 2 and letters < links * 6:
+            continue
+        # одиночные категории/теги — ссылки-якоря внутри
+        if re.fullmatch(r"\[\]\([^)]+\)|\[[A-Za-z &]+\]\(/[^)]*\)", s):
+            continue
+        lines.append(s)
+    return normalize_spaces("\n".join(lines))
+
+
+def crawl_arxiv_abs(url: str, max_chars: int = 3000) -> str:
+    """Pull the abstract straight from an arXiv HTML page.
+
+    The extract API returns the whole page furniture for arXiv and little of
+    the abstract, so this reads the one block that matters.
+    """
+    try:
+        req = urllib.request.Request(url, headers=UA)
+        html = urllib.request.urlopen(req, timeout=20).read().decode("utf-8", "ignore")
+        m = re.search(r'<blockquote class="abstract[^"]*">(.*?)</blockquote>', html, re.S | re.I)
+        if not m:
+            return ""
+        import html as _html
+        text = re.sub(r"<[^>]+>", " ", m.group(1))
+        text = _html.unescape(text)
+        text = re.sub(r"\s+", " ", text).strip()
+        text = text.lstrip("Abstract:").strip()
+        return text[:max_chars]
+    except Exception:
+        return ""
+
+
 def crawl_tavily(url, cfg, max_chars):
     key = os.environ.get(cfg["tavily_api_key_env"], "")
     if not key:
         return ""
+    # arXiv is handled separately: the extract API brings back the page
+    # furniture and barely any of the abstract.
+    if "arxiv.org" in url and "/abs/" in url:
+        return crawl_arxiv_abs(url, max_chars)
     payload = json.dumps({"api_key": key, "urls": [url]}).encode()
     req = urllib.request.Request("https://api.tavily.com/extract", data=payload,
                                  headers={"Content-Type": "application/json"})
@@ -225,9 +312,9 @@ def crawl_tavily(url, cfg, max_chars):
         d = json.loads(urllib.request.urlopen(req, timeout=40).read().decode())
         res = (d.get("results") or [{}])[0]
         raw = (res.get("raw_content") or "") if res else ""
-        raw = re.sub(r"\s+", " ", raw).strip()[:max_chars]
-        return raw
-    except Exception:
+        return clean_article(raw)[:max_chars]
+    except Exception as e:
+        warn(f"краул {url} не выполнен: {e}")
         return ""
 
 
