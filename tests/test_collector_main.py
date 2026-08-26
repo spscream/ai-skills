@@ -68,8 +68,10 @@ def _run(module, argv, monkeypatch, titles=TITLES):
     monkeypatch.setattr(
         module, "fetch_rss",
         # Four fields: fetch_rss also carries the categories the rules read.
-        lambda url, cfg: [(t, f"http://example.invalid/{i}", stamp, [])
-                          for i, t in enumerate(titles)],
+        # The third argument is the per-feed window; it is accepted and ignored
+        # here because the stub decides how many items exist.
+        lambda url, cfg, limit=None: [(t, f"http://example.invalid/{i}", stamp, [])
+                                      for i, t in enumerate(titles)],
         raising=False,
     )
     monkeypatch.setattr(

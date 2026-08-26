@@ -184,3 +184,40 @@ def test_an_item_without_categories_is_not_punished(source):
     """
     cfg = fetch_news.load_config("/x/none")
     assert fetch_news.category_ok(source, [], cfg) is True
+
+
+# --- per-feed window ---------------------------------------------------
+
+def test_feed_window_defaults_and_overrides(monkeypatch):
+    """A firehose needs a wider window than a topic feed.
+
+    Ten entries is plenty for a feed that is already on subject, but on a
+    general news stream the window is the binding limit rather than the quality
+    of the source, so a feed may raise it for itself.
+    """
+    cfg = fetch_news.load_config("/x/none")
+    seen = {}
+
+    class _E(dict):
+        # feedparser entries answer both e["x"] and e.x, and fetch_rss uses both.
+        __getattr__ = dict.get
+
+    class _D:
+        entries = [_E(title=f"AI item {i}", link="u", published="", tags=[])
+                   for i in range(50)]
+
+    monkeypatch.setattr(fetch_news, "feedparser",
+                        type("F", (), {"parse": staticmethod(lambda u: _D())}))
+    seen["default"] = len(fetch_news.fetch_rss("u", cfg))
+    seen["override"] = len(fetch_news.fetch_rss("u", cfg, 40))
+    assert seen["default"] == cfg["max_items"] == 10
+    assert seen["override"] == 40
+
+
+def test_the_russian_feed_carries_its_own_window():
+    cfg = fetch_news.load_config("/x/none")
+    by_name = {f["name"]: f for f in cfg["feeds"]}
+    assert "CNews" in by_name
+    assert by_name["CNews"]["max_items"] == 40
+    # A topic feed does not override and falls back to the default.
+    assert "max_items" not in by_name["TechCrunch AI"]

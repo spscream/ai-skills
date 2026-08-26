@@ -47,6 +47,15 @@ script). Sample:
 feeds:
   - name: TechCrunch AI
     url: https://techcrunch.com/category/artificial-intelligence/feed/
+  - name: CNews                                   # Russian-language source
+    url: https://www.cnews.ru/inc/rss/news.xml
+    max_items: 40                                 # a firehose needs a wider window
+max_items: 10                                     # default window per feed
+feed_category_rules:                              # applied before the keywords
+  TechCrunch AI:
+    require_any: ["ai"]                           # keep only items tagged AI
+  Ведомости:
+    deny_top: ["политика", "общество"]            # drop whole sections
 full_ai_feeds: ["TechCrunch AI", "HN LLM"]      # feeds assumed fully AI-relevant
 # Matched as a whole word only. Vendor names go here when the name is also the
 # start of an ordinary word: meta/metal, cohere/coherent.

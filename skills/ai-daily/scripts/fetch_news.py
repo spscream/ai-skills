@@ -34,7 +34,19 @@ DEFAULT_CONFIG = {
         {"name": "TechCrunch AI", "url": "https://techcrunch.com/category/artificial-intelligence/feed/"},
         {"name": "BBC Tech", "url": "https://feeds.bbci.co.uk/news/technology/rss.xml"},
         {"name": "HN LLM", "url": "https://hnrss.org/newest?q=LLM"},
+        # A Russian-language source, since half the keyword list is Russian.
+        # Chosen by measurement over a general newspaper feed: within the
+        # window the collector actually reads, the newspaper produced no AI
+        # items at all and its keyword hits were mostly false (military drones
+        # caught on беспилотник), while this one produces real market news.
+        # It is a firehose, hence the larger window below.
+        {"name": "CNews", "url": "https://www.cnews.ru/inc/rss/news.xml", "max_items": 40},
     ],
+    # How many entries to read from a feed. A topic feed emits few and all on
+    # subject, so ten is plenty. On a firehose the window itself is the limit,
+    # not the quality of the source: CNews hits grow with it almost linearly --
+    # 2 at ten entries, 4 at twenty, 5 at thirty, 8 at fifty.
+    "max_items": 10,
     "full_ai_feeds": {"TechCrunch AI", "HN LLM"},
     # Акронимы и имена, совпадающие ТОЛЬКО как отдельное слово. Без правой
     # границы "ai" ловит "aim", "aid", "air"; без левой — "Ukraine", "email",
@@ -174,7 +186,8 @@ def category_ok(source, cats, cfg):
     return True
 
 
-def fetch_rss(url, cfg):
+def fetch_rss(url, cfg, limit=None):
+    limit = limit or cfg.get("max_items", 10)
     if not feedparser:
         warn("feedparser не установлен — ленты не читаются вообще (pip install feedparser)")
         return []
@@ -184,7 +197,7 @@ def fetch_rss(url, cfg):
         warn(f"лента {url} не прочитана: {e}")
         return []
     out = []
-    for e in d.entries[:25]:
+    for e in d.entries[:limit]:
         cats = [t.get("term") or "" for t in (e.get("tags") or [])]
         out.append((e.get("title", "").strip(), e.link or "",
                     e.get("published", "") or "", cats))
@@ -245,7 +258,8 @@ def main():
     collected = []
     for f in cfg["feeds"]:
         name = f.get("name", "")
-        for title, link, pub, cats in fetch_rss(f.get("url", ""), cfg):
+        for title, link, pub, cats in fetch_rss(
+                f.get("url", ""), cfg, f.get("max_items")):
             if not title or not category_ok(name, cats, cfg):
                 continue
             if not is_ai(title, name, cfg):
