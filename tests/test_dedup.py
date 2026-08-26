@@ -63,3 +63,49 @@ def test_empty_known_never_dup():
 
 def test_short_title_no_crash():
     assert dedup.is_dup("AI", []) in (True, False)
+
+# --- remember() / --dry-run ---------------------------------------------
+
+def _mem_cur():
+    import sqlite3
+    c = sqlite3.connect(":memory:")
+    c.execute("CREATE TABLE seen (added_ts INTEGER, h TEXT PRIMARY KEY, title TEXT)")
+    return c, c.cursor()
+
+
+def test_remember_writes_by_default():
+    c, cur = _mem_cur()
+    assert dedup.remember(cur, "Some AI headline") is True
+    cur.execute("SELECT h, title FROM seen")
+    rows = cur.fetchall()
+    assert len(rows) == 1
+    assert rows[0][0] == dedup.title_hash("Some AI headline")
+
+
+def test_remember_dry_run_writes_nothing():
+    c, cur = _mem_cur()
+    assert dedup.remember(cur, "Some AI headline", dry_run=True) is False
+    cur.execute("SELECT COUNT(*) FROM seen")
+    assert cur.fetchone()[0] == 0
+
+
+def test_remember_dry_run_leaves_dedup_state_intact():
+    """A dry run must not make an item look already-sent to the next real run."""
+    c, cur = _mem_cur()
+    title = "Anthropic ships a new model"
+    dedup.remember(cur, title, dry_run=True)
+    cur.execute("SELECT title FROM seen")
+    known = [r[0] for r in cur.fetchall()]
+    assert dedup.is_dup(title, known) is False   # still unseen
+    dedup.remember(cur, title)                   # now a real run consumes it
+    cur.execute("SELECT title FROM seen")
+    known = [r[0] for r in cur.fetchall()]
+    assert dedup.is_dup(title, known) is True
+
+
+def test_remember_is_idempotent_on_same_title():
+    c, cur = _mem_cur()
+    dedup.remember(cur, "Repeated headline")
+    dedup.remember(cur, "Repeated headline")
+    cur.execute("SELECT COUNT(*) FROM seen")
+    assert cur.fetchone()[0] == 1

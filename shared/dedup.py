@@ -12,6 +12,7 @@ import hashlib
 import os
 import re
 import sys
+import time
 
 # --- optional rapidfuzz bootstrap ---
 _RF = None
@@ -76,3 +77,23 @@ def is_dup(title, known_titles, threshold=65):
 
 def title_hash(title):
     return hashlib.sha256(norm(title).encode("utf-8")).hexdigest()[:20]
+
+
+def remember(cur, title, dry_run=False, now_ts=None):
+    """Mark `title` as seen so later runs dedup against it.
+
+    Returns True when a row was written, False when suppressed by dry_run.
+
+    The dry_run switch exists so a collector can be run for inspection without
+    consuming items: the write is what makes an item "already sent", so a plain
+    test run would silently burn today's finds and they'd never appear in a real
+    run. Reading the seen table is still done normally, so a dry run shows
+    exactly what a real one would emit right now.
+    """
+    if dry_run:
+        return False
+    ts = int(time.time()) if now_ts is None else int(now_ts)
+    cur.execute(
+        "INSERT OR IGNORE INTO seen VALUES (?,?,?)", (ts, title_hash(title), title)
+    )
+    return True

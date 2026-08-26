@@ -19,7 +19,7 @@ import urllib.request
 # `shared/dedup.py` in the repository, and a test keeps the two byte-identical.
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
-from dedup import is_dup, title_hash  # noqa: E402
+from dedup import is_dup, remember, title_hash  # noqa: E402
 
 DEFAULT_CONFIG = {
     "queries": [
@@ -131,6 +131,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default=os.environ.get("TRENDING_CONFIG", "config.yaml"))
     ap.add_argument("--no-crawl", dest="crawl", action="store_false", default=True)
+    ap.add_argument(
+        "--dry-run", action="store_true",
+        help="inspect output without marking items as seen (nothing is written)",
+    )
     args = ap.parse_args()
     cfg = load_config(args.config)
 
@@ -169,8 +173,9 @@ def main():
         new_known.add(h)
         new_titles.append(title)
         out.append((title, url))
-        cur.execute("INSERT OR IGNORE INTO seen VALUES (?,?,?)", (now_add, h, title))
-    c.commit()
+        remember(cur, title, dry_run=args.dry_run, now_ts=now_add)
+    if not args.dry_run:
+        c.commit()
 
     if not out:
         print("(нет свежих новых навыков/агентов за окно)")
