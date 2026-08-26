@@ -77,3 +77,46 @@ def test_is_ai_honours_custom_keywords(tmp_path):
     cfg = fetch_news.load_config(str(p))
     assert fetch_news.is_ai("Квантовый компьютер собран", "BBC Tech", cfg) is True
     assert fetch_news.is_ai("New LLM model released", "BBC Tech", cfg) is False
+
+
+# --- vendors and model names ------------------------------------------
+
+@pytest.mark.parametrize("headline", [
+    "Meta launches Llama 4",
+    "Cohere raises a round",
+    "Gemini 3 tops the benchmarks",
+    "OpenAI updates Sora",
+    "Grok gets a voice mode",
+    "Nvidia ships new GPUs",
+    "Mistral releases open weights",
+    "Hugging Face hits 2M models",
+    "Perplexity launches search",
+    "ElevenLabs clones voices",
+    "Stable Diffusion 4 released",
+    "Qwen tops the leaderboard",
+    "xAI announces funding",
+    "Databricks buys a startup",
+    "Groq speeds up inference",
+    "GigaChat обновили",
+    "Кандинский рисует лучше",
+    "Инференс подешевел вдвое",
+])
+def test_is_ai_knows_the_vendors_and_models(headline):
+    cfg = fetch_news.load_config("/x/none")
+    assert fetch_news.is_ai(headline, "BBC Tech", cfg) is True
+
+
+@pytest.mark.parametrize("headline", [
+    # A vendor name that is also the start of an ordinary word must not leak.
+    "Metal prices climb in Asia",
+    "Metadata standard published",
+    "Coherent light source built",
+    "Policy coherence review published",
+    # These are why flux and runway are deliberately absent from the lists:
+    # matching them as whole words would still fire here.
+    "Runway repairs at Heathrow",
+    "Magnetic flux measured in the lab",
+])
+def test_is_ai_does_not_leak_on_vendor_lookalikes(headline):
+    cfg = fetch_news.load_config("/x/none")
+    assert fetch_news.is_ai(headline, "BBC Tech", cfg) is False

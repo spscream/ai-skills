@@ -48,8 +48,13 @@ feeds:
   - name: TechCrunch AI
     url: https://techcrunch.com/category/artificial-intelligence/feed/
 full_ai_feeds: ["TechCrunch AI", "HN LLM"]      # feeds assumed fully AI-relevant
-ai_acronyms: ["ии", "ai", "llm", "gpt"]          # matched as a whole word only
-ai_keywords: ["искусственн", "модел", "claude", "openai", ...]   # matched at a word start
+# Matched as a whole word only. Vendor names go here when the name is also the
+# start of an ordinary word: meta/metal, cohere/coherent.
+ai_acronyms: ["ии", "ai", "llm", "gpt", "meta", "cohere", "gemini", "llama", ...]
+# Matched at the start of a word, so endings may vary: "модел" -> "модель".
+# Vendors, labs and model names live here too.
+ai_keywords: ["искусственн", "модел", "claude", "openai", "deepseek", "anthropic",
+              "nvidia", "mistral", "midjourney", "qwen", "gigachat", ...]
 db_path: ./seen_ai_news.db                       # SQLite "seen" store (dedup)
 max_hours: 48                                    # freshness window
 crawl_max_chars: 1600

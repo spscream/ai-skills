@@ -36,16 +36,31 @@ DEFAULT_CONFIG = {
         {"name": "HN LLM", "url": "https://hnrss.org/newest?q=LLM"},
     ],
     "full_ai_feeds": {"TechCrunch AI", "HN LLM"},
-    # Акронимы: совпадают только как отдельное слово. Без правой границы "ai"
-    # ловит "aim", "aid", "air"; без левой — "Ukraine", "email", "chain", "said".
-    "ai_acronyms": ["ии", "ai", "llm", "gpt", "гпт"],
+    # Акронимы и имена, совпадающие ТОЛЬКО как отдельное слово. Без правой
+    # границы "ai" ловит "aim", "aid", "air"; без левой — "Ukraine", "email",
+    # "chain", "said". Сюда же те названия, что являются началом обычных слов:
+    # "cohere" -> "coherent", "coherence". Голое "meta" сюда не годится:
+    # у Meta много новостей про соцсети и VR, и они не про ИИ — берём "meta ai".
+    "ai_acronyms": [
+        "ии", "ai", "llm", "vlm", "agi", "gpt", "гпт",
+        "cohere", "xai", "grok", "gemini", "sora", "llama",
+    ],
     # Основы: правая граница свободна, чтобы ловить словоформы ("модел" ->
     # "модель", "модели"), но левая обязательна — иначе "ремоделирование".
     "ai_keywords": [
-        "искусственн", "нейросет", "нейросеч", "модел",
-        "claude", "chatgpt", "антропик", "openai", "deepseek", "алгоритм", "машинн",
-        "машинное обучение", "агент", "робот", "robotics", "генеративн", "image gen",
-        "дипфейк", "беспилотник",
+        # общая лексика
+        "искусственн", "нейросет", "нейросеч", "нейронк", "модел",
+        "алгоритм", "машинн", "машинное обучение", "генеративн", "инференс",
+        "агент", "робот", "robotics", "чат-бот", "чатбот",
+        "image gen", "дипфейк", "беспилотник",
+        # компании и лаборатории
+        "openai", "anthropic", "антропик", "deepmind", "mistral", "midjourney",
+        "nvidia", "huggingface", "hugging face", "perplexity", "elevenlabs",
+        "stability ai", "databricks", "cerebras", "sambanova", "groq",
+        "moonshot", "scale ai", "character.ai", "runwayml", "meta ai",
+        # модели и продукты
+        "chatgpt", "claude", "deepseek", "mixtral", "qwen", "copilot",
+        "stable diffusion", "gigachat", "гигачат", "яндексгпт", "кандинск",
     ],
     "db_path": "./seen_ai_news.db",
     "max_hours": 48,
