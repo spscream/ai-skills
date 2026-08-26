@@ -41,6 +41,18 @@ DEFAULT_CONFIG = {
         "mcp-server",
     ],
     "github_max": 10,
+    # Порог по звёздам для находок с GitHub.
+    #
+    # Запрос ищет репозитории, созданные за последние `days`, поэтому набрать
+    # звёзды они физически не успевают — и выдача забивается личными
+    # шаблонами на ноль звёзд, вытесняя кураторские находки поиска.
+    # Замер одной недели: 48 уникальных, медиана 7, минимум 0. Порог 10 стоит
+    # выше медианы, убирает все нулёвки и единицы, но оставляет 20 кандидатов
+    # — вдвое больше, чем нужно сводке.
+    #
+    # Ставить сильно выше опасно: в тихую неделю новых репозиториев со
+    # звёздами может не быть вовсе, и секция опустеет. Ноль отключает порог.
+    "github_min_stars": 10,
     "gh_token_env": "GH_TOKEN",        # optional, поднимает лимит 60->5000 req/h
     "db_path": "./seen_skills.db",
     "days": 7,
@@ -106,9 +118,16 @@ def github_search(topic, days, cfg):
     try:
         d = json.loads(urllib.request.urlopen(req, timeout=40).read().decode())
         out = []
+        min_stars = int(cfg.get("github_min_stars", 0) or 0)
+        skipped = 0
         for i in d.get("items", []):
+            if i.get("stargazers_count", 0) < min_stars:
+                skipped += 1
+                continue
             title = f"{i.get('full_name','')}: {(i.get('description') or '').strip()[:90]}"
             out.append((title, i.get("html_url") or "", ""))
+        if skipped:
+            warn(f"тема {topic!r}: отсеяно {skipped} репозиториев ниже {min_stars} звёзд")
         return out
     except Exception as e:
         warn(f"поиск GitHub по теме {topic!r} не выполнен: {e}")
