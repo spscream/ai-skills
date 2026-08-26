@@ -67,7 +67,8 @@ def _run(module, argv, monkeypatch, titles=TITLES):
     stamp = formatdate(localtime=False)
     monkeypatch.setattr(
         module, "fetch_rss",
-        lambda url, cfg: [(t, f"http://example.invalid/{i}", stamp)
+        # Four fields: fetch_rss also carries the categories the rules read.
+        lambda url, cfg: [(t, f"http://example.invalid/{i}", stamp, [])
                           for i, t in enumerate(titles)],
         raising=False,
     )

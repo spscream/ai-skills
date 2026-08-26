@@ -71,6 +71,22 @@ DEFAULT_CONFIG = {
         "chatgpt", "claude", "deepseek", "mixtral", "qwen", "copilot",
         "stable diffusion", "gigachat", "гигачат", "яндексгпт", "кандинск",
     ],
+    # Правила по <category>, применяются ДО поиска по словам: категория
+    # дешевле и снимает целые пласты чужой темы прежде, чем ключ успеет
+    # ошибиться. Ключи правила — имена лент из feeds.
+    #
+    # deny_top    — выкинуть, если верхний уровень категории в списке.
+    #               Верхний уровень: "Политика / Армия" -> "политика".
+    # require_any — оставить, только если есть хоть одна из категорий.
+    #               Запись вообще без категорий не наказывается: лента могла
+    #               перестать их отдавать, и молча потерять источник целиком
+    #               хуже, чем пропустить лишнее.
+    "feed_category_rules": {
+        "TechCrunch AI": {"require_any": ["ai", "artificial intelligence"]},
+        "Ведомости": {"deny_top": [
+            "политика", "общество", "стиль жизни", "недвижимость", "карьера", "спорт",
+        ]},
+    },
     "db_path": "./seen_ai_news.db",
     "max_hours": 48,
     "crawl_max_chars": 1600,
@@ -133,6 +149,31 @@ def is_ai(title, source, cfg):
     return bool(rx.search(str(title).lower()))
 
 
+def category_ok(source, cats, cfg):
+    """Пропускает ли запись правило по категориям своей ленты.
+
+    Замерено на общей ленте Ведомостей: из пяти срабатываний фильтра по словам
+    четыре были ложными — «ПВО сбили 39 беспилотников» цеплялось за
+    «беспилотник», «образование перейдет на новую модель» за «модел». Обе
+    категории к теме отношения не имеют, и отсечь их по категории дешевле и
+    надёжнее, чем чинить словарь.
+    """
+    rule = (cfg.get("feed_category_rules") or {}).get(source)
+    if not rule:
+        return True
+    low = [str(x).strip().lower() for x in (cats or []) if str(x).strip()]
+    deny = rule.get("deny_top")
+    if deny:
+        tops = {x.split(" / ")[0].strip() for x in low}
+        if tops & {str(d).strip().lower() for d in deny}:
+            return False
+    need = rule.get("require_any")
+    if need and low:
+        if not (set(low) & {str(n).strip().lower() for n in need}):
+            return False
+    return True
+
+
 def fetch_rss(url, cfg):
     if not feedparser:
         warn("feedparser не установлен — ленты не читаются вообще (pip install feedparser)")
@@ -144,7 +185,9 @@ def fetch_rss(url, cfg):
         return []
     out = []
     for e in d.entries[:25]:
-        out.append((e.get("title", "").strip(), e.link or "", e.get("published", "") or ""))
+        cats = [t.get("term") or "" for t in (e.get("tags") or [])]
+        out.append((e.get("title", "").strip(), e.link or "",
+                    e.get("published", "") or "", cats))
     return out
 
 
@@ -201,10 +244,13 @@ def main():
     cutoff = now - cfg["max_hours"] * 3600
     collected = []
     for f in cfg["feeds"]:
-        for title, link, pub in fetch_rss(f.get("url", ""), cfg):
-            if not title or not is_ai(title, f.get("name", ""), cfg):
+        name = f.get("name", "")
+        for title, link, pub, cats in fetch_rss(f.get("url", ""), cfg):
+            if not title or not category_ok(name, cats, cfg):
                 continue
-            collected.append((title, f.get("name", ""), parse_ts(pub), link))
+            if not is_ai(title, name, cfg):
+                continue
+            collected.append((title, name, parse_ts(pub), link))
 
     collected.sort(key=lambda x: x[2], reverse=True)
     fresh = [x for x in collected if x[2] >= cutoff]

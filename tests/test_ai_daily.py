@@ -148,3 +148,39 @@ def test_is_ai_covers_the_concepts_in_english_too(headline):
     """
     cfg = fetch_news.load_config("/x/none")
     assert fetch_news.is_ai(headline, "BBC Tech", cfg) is True
+
+
+# --- category rules ----------------------------------------------------
+
+@pytest.mark.parametrize("source,cats,expected", [
+    # A general news feed: whole sections have nothing to do with the subject,
+    # and cutting them by category is cheaper and safer than patching the
+    # keyword list. Measured there: four of five keyword hits were false, all
+    # of them in Политика and Общество.
+    ("Ведомости", ["Политика / Армия и спецслужбы"], False),
+    ("Ведомости", ["Общество"], False),
+    ("Ведомости", ["Стиль жизни"], False),
+    ("Ведомости", ["Технологии"], True),
+    ("Ведомости", ["Бизнес / Торговля и услуги"], True),
+    ("Ведомости", ["Инвестиции / Эмитенты"], True),
+    # A category feed: every item carries the tag, so requiring it costs
+    # nothing and stops a stray podcast from riding in on blanket trust.
+    ("TechCrunch AI", ["AI", "podcasts"], True),
+    ("TechCrunch AI", ["Media & Entertainment", "podcasts"], False),
+    # No rule for this feed at all.
+    ("BBC Tech", ["whatever"], True),
+])
+def test_category_rules(source, cats, expected):
+    cfg = fetch_news.load_config("/x/none")
+    assert fetch_news.category_ok(source, cats, cfg) is expected
+
+
+@pytest.mark.parametrize("source", ["Ведомости", "TechCrunch AI"])
+def test_an_item_without_categories_is_not_punished(source):
+    """A feed that stops emitting categories must not silently disappear.
+
+    Losing a whole source without a word is worse than letting one stray item
+    through, and the editor drops strays anyway.
+    """
+    cfg = fetch_news.load_config("/x/none")
+    assert fetch_news.category_ok(source, [], cfg) is True
