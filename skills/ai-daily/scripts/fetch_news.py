@@ -13,6 +13,7 @@ import re
 import sqlite3
 import sys
 import time
+import urllib.error
 import urllib.request
 
 try:
@@ -105,6 +106,12 @@ DEFAULT_CONFIG = {
     "max_crawl": 14,
     "max_results": 40,
     "tavily_api_key_env": "TAVILY_API_KEY",
+    # Запасные крауллеры в порядке очереди. Ни один из трёх не берёт всё:
+    # Tavily справляется и с TechCrunch, и с cnews; Exa силён на англоязычном
+    # и проходит Cloudflare, но спотыкается на русских лентах; Firecrawl
+    # наоборот берёт cnews и пасует перед капчей. Отсюда и цепочка.
+    "exa_api_key_env": "EXA_API_KEY",
+    "firecrawl_api_key_env": "FIRECRAWL_API_KEY",
     # Откуда дочитывать ключи, если их нет в окружении.
     "env_file": "/opt/data/.env",
 }
@@ -320,25 +327,193 @@ def crawl_arxiv_abs(url: str, max_chars: int = 3000) -> str:
         return ""
 
 
+class CrawlerRefused(Exception):
+    """Провайдер краула отказал целиком, а не по конкретной странице.
+
+    Разница принципиальная. «Страница не отдалась» — частный случай: платный
+    сайт, битая ссылка, таймаут; следующий URL у того же провайдера пройдёт.
+    «Провайдер отказал» — кончились кредиты, протух ключ, упёрлись в лимит
+    частоты; следующие тринадцать запросов туда же обречены, и делать их
+    незачем.
+
+    До 03.09.2026 этой разницы не было: любой отказ ловился одним `except` и
+    превращался в пустую строку. 02.09 у Tavily кончился баланс на середине
+    цикла, девять статей приехали без содержания, редактор их молча выбросил,
+    а пост вышел вчетверо короче обычного — и ни в коде, ни в выводе не было
+    ничего, что отличало бы это от честного «сегодня новостей мало».
+    """
+
+
+# Коды, по которым отказ считается отказом провайдера, а не страницы.
+# 432 — фирменный «кредиты кончились» у Tavily, 402 — общепринятый Payment
+# Required, 401/403 — ключ, 429 — частота, 5xx — авария на их стороне.
+API_REFUSAL_CODES = {401, 402, 403, 429, 432}
+
+# Сколько страниц подряд должно не отдаться, чтобы счесть это отказом
+# провайдера, даже если кодов выше он не присылал. Прикрывает случай, когда
+# сервис отвечает 200 с пустотой или просто перестаёт отвечать: три подряд —
+# это уже не совпадение, а тенденция.
+CONSECUTIVE_FAILURES_AS_REFUSAL = 3
+
+# Приметы страницы-заглушки антибота. Firecrawl отдаёт такую с кодом 200 и
+# полем success=true — по коду возврата её не отличить, только по тексту.
+# Проверено на TechCrunch: 48 килобайт «Checking your Browser…» вместо статьи.
+CHALLENGE_MARKERS = (
+    "checking your browser", "verifying you are human", "enable javascript and cookies",
+    "challenges.cloudflare.com", "just a moment...", "ddos protection by",
+)
+
+# Ниже этого объёма текст бесполезен редактору: столько занимает одна
+# навигация, оставшаяся после чистки. Такой результат считаем неудачей
+# страницы и пробуем следующего провайдера.
+MIN_USEFUL_CHARS = 200
+
+
+def _usable(text: str) -> bool:
+    """Похоже ли это на статью, а не на заглушку антибота или на огрызок."""
+    if len(text) < MIN_USEFUL_CHARS:
+        return False
+    head = text[:2000].lower()
+    return not any(m in head for m in CHALLENGE_MARKERS)
+
+
+def _http_json(url, payload, headers, timeout=40):
+    """POST JSON, вернуть разобранный ответ. HTTP-код отказа — в CrawlerRefused."""
+    req = urllib.request.Request(url, data=json.dumps(payload).encode(),
+                                 headers=dict(headers, **{"Content-Type": "application/json"}))
+    try:
+        return json.loads(urllib.request.urlopen(req, timeout=timeout).read().decode())
+    except urllib.error.HTTPError as e:
+        if e.code in API_REFUSAL_CODES or e.code >= 500:
+            raise CrawlerRefused(f"HTTP {e.code}") from e
+        raise
+
+
 def crawl_tavily(url, cfg, max_chars):
     key = api_key(cfg["tavily_api_key_env"], cfg)
     if not key:
-        return ""
+        raise CrawlerRefused(f"нет ключа {cfg['tavily_api_key_env']}")
     # arXiv is handled separately: the extract API brings back the page
     # furniture and barely any of the abstract.
     if "arxiv.org" in url and "/abs/" in url:
         return crawl_arxiv_abs(url, max_chars)
-    payload = json.dumps({"api_key": key, "urls": [url]}).encode()
-    req = urllib.request.Request("https://api.tavily.com/extract", data=payload,
-                                 headers={"Content-Type": "application/json"})
-    try:
-        d = json.loads(urllib.request.urlopen(req, timeout=40).read().decode())
-        res = (d.get("results") or [{}])[0]
-        raw = (res.get("raw_content") or "") if res else ""
-        return clean_article(raw)[:max_chars]
-    except Exception as e:
-        warn(f"краул {url} не выполнен: {e}")
-        return ""
+    d = _http_json("https://api.tavily.com/extract",
+                   {"api_key": key, "urls": [url]}, {})
+    res = (d.get("results") or [{}])[0]
+    raw = (res.get("raw_content") or "") if res else ""
+    return clean_article(raw)[:max_chars]
+
+
+def crawl_exa(url, cfg, max_chars):
+    """Запасной краул №1. Берёт из индекса, при промахе крауллит вживую.
+
+    Выбран первым запасным по замеру 03.09.2026: единственный из трёх, кто
+    отдаёт статьи TechCrunch — их Tavily берёт, а Firecrawl упирается в
+    капчу Cloudflare. Русские источники ему не даются (cnews отвечает ему
+    500), поэтому в одиночку он основной заменой быть не может.
+    """
+    key = api_key(cfg.get("exa_api_key_env", "EXA_API_KEY"), cfg)
+    if not key:
+        raise CrawlerRefused("нет ключа EXA_API_KEY")
+    d = _http_json("https://api.exa.ai/contents",
+                   {"urls": [url], "text": True, "livecrawl": "fallback"},
+                   {"x-api-key": key}, timeout=60)
+    res = (d.get("results") or [{}])[0]
+    return clean_article((res.get("text") or "") if res else "")[:max_chars]
+
+
+def crawl_firecrawl(url, cfg, max_chars):
+    """Запасной краул №2. Единственный, кто берёт cnews; на CF-сайтах пасует."""
+    key = api_key(cfg.get("firecrawl_api_key_env", "FIRECRAWL_API_KEY"), cfg)
+    if not key:
+        raise CrawlerRefused("нет ключа FIRECRAWL_API_KEY")
+    d = _http_json("https://api.firecrawl.dev/v2/scrape",
+                   {"url": url, "formats": ["markdown"], "onlyMainContent": True},
+                   {"Authorization": f"Bearer {key}"}, timeout=60)
+    md = (d.get("data") or {}).get("markdown") or ""
+    return clean_article(md)[:max_chars]
+
+
+# Порядок обхода. Именами, а не ссылками на функции: ссылки замёрзли бы на
+# момент импорта, и подмена `crawl_tavily` в тесте молча не сработала бы —
+# цепочка продолжала бы звать настоящую и ходить в сеть.
+CRAWLERS = ("tavily", "exa", "firecrawl")
+
+
+def _crawler(name):
+    return globals()[f"crawl_{name}"]
+
+
+class CrawlChain:
+    """Цепочка провайдеров краула с запоминанием отказов.
+
+    Отказавший провайдер выбывает до конца прогона: повторять к нему запросы
+    по каждому следующему URL — значит тратить минуты на гарантированные
+    ошибки. Отчёт о том, кто сколько отдал и кто отвалился, уходит в stderr:
+    обёртка ищет там маркер и шлёт владельцу личное сообщение.
+    """
+
+    def __init__(self, cfg):
+        self.cfg = cfg
+        self.dead = {}                      # имя -> причина отказа
+        self.served = {}                    # имя -> сколько страниц отдал
+        self.streak = {}                    # имя -> неудач подряд
+        self.empty = 0                      # страниц без содержания
+
+    def fetch(self, url, max_chars):
+        """Текст статьи и признак того, что провайдеры вообще отвечали.
+
+        Возвращает (text, reached). reached=False означает, что живых
+        провайдеров не осталось и статью даже не пытались взять — такую
+        нельзя ни отдавать редактору, ни помечать прочитанной.
+        """
+        alive = [n for n in CRAWLERS if n not in self.dead]
+        if not alive:
+            return "", False
+        # Ответил ли хоть кто-то по существу этой страницы. Отказ на уровне
+        # сервиса ответом не считается: на первой же статье прогона все трое
+        # могут выбыть разом, и без этого флага она уходила бы в «прочитанные»
+        # пустой — ровно та потеря, ради которой всё и затевалось.
+        answered = False
+        for name in alive:
+            try:
+                text = _crawler(name)(url, self.cfg, max_chars)
+            except CrawlerRefused as e:
+                self.dead[name] = str(e)
+                warn(f"краул {name} отказал целиком ({e}) — выбывает до конца прогона")
+                continue
+            except Exception as e:
+                answered = True
+                self.streak[name] = self.streak.get(name, 0) + 1
+                warn(f"краул {name}: {url} не выполнен ({e})")
+                if self.streak[name] >= CONSECUTIVE_FAILURES_AS_REFUSAL:
+                    self.dead[name] = f"{CONSECUTIVE_FAILURES_AS_REFUSAL} ошибки подряд"
+                    warn(f"краул {name} выбывает: {self.dead[name]}")
+                continue
+            answered = True
+            if _usable(text):
+                self.streak[name] = 0
+                self.served[name] = self.served.get(name, 0) + 1
+                return text, True
+            warn(f"краул {name}: {url} вернул непригодное ({len(text)} симв.)")
+        if not answered:
+            return "", False
+        # Живые провайдеры попробовали и не смогли — это беда страницы, а не
+        # сервиса. Статью отдаём без содержания и помечаем прочитанной: иначе
+        # платный сайт возвращался бы в выдачу каждый день.
+        self.empty += 1
+        return "", True
+
+    def report(self):
+        served = ", ".join(f"{n}={c}" for n, c in self.served.items()) or "никто"
+        line = f"CRAWL-REPORT отдали: {served}; без содержания: {self.empty}"
+        if self.dead:
+            line += "; ОТКАЗАЛИ: " + ", ".join(f"{n} ({r})" for n, r in self.dead.items())
+        warn(line)
+        if self.dead:
+            # Маркер для обёртки: по нему post_common шлёт владельцу личку.
+            warn("CRAWL-DEGRADED " + "; ".join(
+                f"{n}: {r}" for n, r in self.dead.items()))
 
 
 def main():
@@ -398,18 +573,49 @@ def main():
     # уходит читателю: помеченный, но не напечатанный элемент не попадёт уже
     # ни в один прогон — он исчезает молча.
     lines = out[:cfg["max_results"]]
-    for title, _source, _date_s, _url in lines:
+
+    # Краул ДО печати и до записи в seen, хотя это и стоит отложенного вывода.
+    # Порядок здесь несёт инвариант: напечатано == помечено прочитанным ==
+    # отдано редактору. Пока краул шёл после записи, отказ провайдера на
+    # середине цикла сжигал остаток выдачи навсегда — статьи были помечены
+    # прочитанными ещё до того, как выяснялось, что содержания не будет
+    # (потеря 02.09.2026, девять новостей). Теперь статья, до которой краул не
+    # дошёл, не печатается и не помечается: назавтра она вернётся.
+    chain, delivered, contents = CrawlChain(cfg), [], []
+    if args.crawl:
+        for item in lines[:cfg["max_crawl"]]:
+            text, reached = chain.fetch(item[3], cfg["crawl_max_chars"])
+            if not reached:
+                break
+            delivered.append(item)
+            contents.append((item[0], text))
+        # Хвост сверх max_crawl идёт редактору без содержания и при живом
+        # краулере: его никто и не собирался краулить.
+        if len(delivered) == cfg["max_crawl"]:
+            delivered.extend(lines[cfg["max_crawl"]:])
+        chain.report()
+    else:
+        delivered = lines
+
+    if not delivered:
+        # Ни одной статьи с содержанием — печатать нечего. Молчаливый выход
+        # здесь честнее пустых блоков: обёртка увидит отсутствие материала и
+        # не станет публиковать, а seen не тронут, и завтра всё вернётся.
+        print("(нет свежих новых новостей за окно)")
+        return
+
+    for title, _source, _date_s, _url in delivered:
         remember(cur, title, dry_run=args.dry_run, now_ts=now_add)
     if not args.dry_run:
         c.commit()
 
     print("СТАТЬИ (заголовок | источник | дата | url):")
-    for title, source, date_s, url in lines:
+    for title, source, date_s, url in delivered:
         print(f"{title} | {source} | {date_s} | {url}")
-    if args.crawl:
+    if contents:
         print("\nСТАТЬИ-СОДЕРЖАНИЕ (заголовок === текст):")
-        for title, _source, _date_s, url in lines[:cfg["max_crawl"]]:
-            print(f"[{title}]\n{crawl_tavily(url, cfg, cfg['crawl_max_chars'])}\n[КОНЕЦ]\n")
+        for title, text in contents:
+            print(f"[{title}]\n{text}\n[КОНЕЦ]\n")
 
 
 if __name__ == "__main__":
