@@ -14,6 +14,7 @@ would agree with whatever the code happens to send.
 """
 import io
 import contextlib
+import json
 import sqlite3
 import sys
 from email.utils import formatdate
@@ -26,15 +27,18 @@ sys.path.insert(0, str(_ROOT / "skills" / "ai-daily" / "scripts"))
 import fetch_news  # noqa: E402
 
 # (title, source, date, url) -- the shape rank_pool and apply_source_quota pass
-# around. Sources repeat on purpose: the cap has nothing to bite on otherwise.
+# around. Sources repeat because the cap has nothing to bite on otherwise, and
+# every title differs because fuzzy dedup collapses near-identical ones: a
+# fixture of "another press release" / "a third press release" measures the
+# deduper rather than whatever the test meant to check.
 POOL = [
     ("Big lab ships a model", "TechCrunch AI", "03.09", "http://x/1"),
-    ("Local firm adopts an assistant", "CNews", "03.09", "http://x/2"),
+    ("A bank rolls out an assistant", "CNews", "03.09", "http://x/2"),
     ("Regulator drafts AI rules", "BBC Tech", "03.09", "http://x/3"),
-    ("Another vendor press release", "CNews", "03.09", "http://x/4"),
-    ("A third vendor press release", "CNews", "03.09", "http://x/5"),
+    ("A retailer automates its warehouse", "CNews", "03.09", "http://x/4"),
+    ("A telecom opens a datacenter", "CNews", "03.09", "http://x/5"),
     ("Show HN: a small tool", "HN LLM", "02.09", "http://x/6"),
-    ("A fourth vendor press release", "CNews", "02.09", "http://x/7"),
+    ("A carmaker tries computer vision", "CNews", "02.09", "http://x/7"),
 ]
 
 
@@ -123,10 +127,10 @@ def test_an_uncapped_source_is_untouched():
 
 FEED = [
     ("Big lab ships a model", "TechCrunch AI"),
-    ("Local firm adopts an assistant", "CNews"),
+    ("A bank rolls out an assistant", "CNews"),
     ("Regulator drafts AI rules", "BBC Tech"),
-    ("Another vendor press release", "CNews"),
-    ("A third vendor press release", "CNews"),
+    ("A retailer automates its warehouse", "CNews"),
+    ("A telecom opens a datacenter", "CNews"),
     ("Show HN: a small tool", "HN LLM"),
 ]
 
@@ -163,6 +167,14 @@ def _run(cfg, monkeypatch):
     with contextlib.redirect_stdout(buf):
         fetch_news.main()
     return buf.getvalue()
+
+
+def _stats(stderr_text):
+    """Разобрать строку STATS-JSON из stderr сборщика."""
+    for line in stderr_text.splitlines():
+        if line.startswith("fetch_news: STATS-JSON "):
+            return json.loads(line.split("STATS-JSON ", 1)[1])
+    return None
 
 
 def _seen(db):
@@ -214,3 +226,64 @@ def test_a_broken_ranker_still_produces_a_post(tmp_path, monkeypatch):
     assert "СТАТЬИ (заголовок | источник | дата | url):" in out
     assert len([t for t, _ in FEED if t in out]) == 3
     assert _seen(db) == 3
+
+
+# --- телеметрия прогона ---
+
+def test_the_run_reports_its_counters_on_stderr(tmp_path, monkeypatch, capsys):
+    """STATS-JSON — единственный машиночитаемый след прогона.
+
+    Обёртка строит из него отчёт владельцу. Если строка пропадёт или поедет
+    формат, отчёт молча обеднеет, а пост останется прежним — то есть заметить
+    будет не по чему.
+    """
+    db = tmp_path / "seen.db"
+    _run(_cfg(tmp_path, db, []), monkeypatch)
+    stats = _stats(capsys.readouterr().err)
+
+    assert stats is not None, "строки STATS-JSON нет"
+    assert stats["printed"] == 3, "напечатано должно совпадать с max_results"
+    assert sum(f["raw"] for f in stats["feeds"].values()) == len(FEED)
+    assert stats["candidates"] >= stats["printed"]
+    # Второй прогон видит те же новости уже показанными, и это должно быть
+    # видно в счётчике, а не только в укоротившейся выдаче.
+    _run(_cfg(tmp_path, db, []), monkeypatch)
+    again = _stats(capsys.readouterr().err)
+    assert again["dup_seen"] == 3, "дедуп по базе обязан считаться отдельно"
+
+
+def test_a_failed_ranker_reports_zero_picked(tmp_path, monkeypatch, capsys):
+    """Ноль в отчёте и есть сигнал «сегодня отбирали по свежести»."""
+    db = tmp_path / "seen.db"
+    cmd = _ranker(tmp_path, "sys.exit(1)")
+    _run(_cfg(tmp_path, db, ["rank_cmd:"] + [f"  - {c}" for c in cmd]), monkeypatch)
+    assert _stats(capsys.readouterr().err)["ranked"] == 0
+
+
+def test_marker_lines_from_the_ranker_reach_the_wrapper(tmp_path, capsys):
+    """Маркеры чужого процесса проходят наружу, болтовня — нет.
+
+    Расход токенов ранжировщика виден только ему самому: он отдельный процесс.
+    Без этой пересылки отчёт показывал бы половину цены прогона.
+    """
+    cmd = _ranker(tmp_path, """
+sys.stdin.read()
+print('RANK-USAGE [{"prompt": 10}]', file=sys.stderr)
+print('обычная болтовня ранжировщика', file=sys.stderr)
+print('0')
+""")
+    fetch_news.rank_pool(list(POOL), {"rank_cmd": cmd})
+    err = capsys.readouterr().err
+    assert 'RANK-USAGE [{"prompt": 10}]' in err
+    assert "болтовня" not in err
+
+
+def test_markers_survive_a_ranker_that_then_fails(tmp_path, capsys):
+    """Потраченное на провалившемся вызове — тоже расход, и он не должен пропасть."""
+    cmd = _ranker(tmp_path, """
+sys.stdin.read()
+print('RANK-USAGE [{"prompt": 7}]', file=sys.stderr)
+sys.exit(1)
+""")
+    assert fetch_news.rank_pool(list(POOL), {"rank_cmd": cmd}) == POOL
+    assert 'RANK-USAGE [{"prompt": 7}]' in capsys.readouterr().err

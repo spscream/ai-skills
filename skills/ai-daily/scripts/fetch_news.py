@@ -532,7 +532,11 @@ class CrawlChain:
                 f"{n}: {r}" for n, r in self.dead.items()))
 
 
-def rank_pool(pool, cfg):
+# Маркер в чужом stderr: первое слово ЗАГЛАВНЫМИ, дальше пробел. См. rank_pool.
+MARKER_LINE = re.compile(r"^[A-Z][A-Z0-9-]{2,} ")
+
+
+def rank_pool(pool, cfg, stats=None):
     """Переставить кандидатов внешним ранжировщиком. Вернуть новый порядок.
 
     Свежесть — не мера интересности. Сортировка по времени публикации поднимает
@@ -557,7 +561,13 @@ def rank_pool(pool, cfg):
     Любой сбой — нет команды, ненулевой код, таймаут, пустой ответ — это
     порядок по свежести и предупреждение в stderr. Сводка выходит каждый день,
     и упавший ранжировщик не имеет права стоить дня без поста.
+
+    stats, если передан, получает "ranked" — сколько номеров вернул
+    ранжировщик, или 0 при откате. Ноль в отчёте прогона и есть тот сигнал,
+    что отбор сегодня был по свежести.
     """
+    if stats is not None:
+        stats["ranked"] = 0
     cmd = cfg.get("rank_cmd")
     if not cmd or len(pool) < 2:
         return pool
@@ -573,12 +583,21 @@ def rank_pool(pool, cfg):
     except (OSError, subprocess.SubprocessError) as e:
         warn(f"RANK-DEGRADED ранжировщик не отработал ({e}) — порядок по свежести")
         return pool
+    # Строки-маркеры пропускаем наружу всегда, и до проверки кода возврата:
+    # они адресованы не этому коду, а обёртке, которая собирает отчёт, и
+    # потраченное на неудачном вызове тоже должно попасть в цену прогона.
+    # Маркер — первое слово из заглавных латинских букв и дефисов; остальное
+    # считается болтовнёй ранжировщика и остаётся при нём.
+    for line in (p.stderr or "").splitlines():
+        if MARKER_LINE.match(line.strip()):
+            warn(line.strip())
+
     if p.returncode != 0:
-        # Только здесь и печатаем чужой stderr — при отказе он единственная
+        # Здесь печатаем чужой stderr целиком — при отказе он единственная
         # улика. На успешном прогоне не дублируем: команда сама отвечает за
-        # свою диагностику, а её пересказ ушёл бы в тот же лог вторым экземпляром.
-        # Хвост по строкам, а не по символам: обрезка по символам рвёт слова
-        # пополам, и в логе оказывается «ь ИИ; [CNews] …».
+        # свою диагностику, а её пересказ ушёл бы в тот же лог вторым
+        # экземпляром. Хвост по строкам, а не по символам: обрезка по символам
+        # рвёт слова пополам, и в логе оказывается «ь ИИ; [CNews] …».
         tail = "\n".join((p.stderr or "").strip().splitlines()[-12:])
         warn(f"RANK-DEGRADED ранжировщик exit={p.returncode} — порядок по свежести"
              + (f"\n{tail}" if tail else ""))
@@ -597,10 +616,12 @@ def rank_pool(pool, cfg):
         warn("RANK-DEGRADED ранжировщик не вернул ни одного номера — порядок по свежести")
         return pool
     warn(f"RANK-REPORT отобрано {len(picked)} из {len(pool)}")
+    if stats is not None:
+        stats["ranked"] = len(picked)
     return picked + [it for i, it in enumerate(pool) if i not in taken]
 
 
-def apply_source_quota(items, cfg):
+def apply_source_quota(items, cfg, stats=None):
     """Обрезать список по потолку на источник, сохраняя порядок.
 
     Квота строгая: лишнее выбрасывается, а не сдвигается в хвост. Мягкий
@@ -628,6 +649,8 @@ def apply_source_quota(items, cfg):
         # max_results. Число здесь — верхняя оценка, а не потери в посте.
         warn("квота на источник срезала из очереди: "
              + ", ".join(f"{k} -{v}" for k, v in sorted(dropped.items())))
+    if stats is not None:
+        stats["quota_dropped"] = dropped
     return kept
 
 
@@ -653,32 +676,54 @@ def main():
     known = {r[0] for r in rows}
     seen_titles = [t for _, t in rows if t]
 
+    # Счётчики прогона. Считаются по ходу дела, а не восстанавливаются потом по
+    # логам: разница между «лента отдала мало» и «фильтр съел много» видна
+    # только здесь, а снаружи оба случая выглядят как короткий пост.
+    stats = {"feeds": {}, "dropped_category": 0, "dropped_keyword": 0,
+             "stale": 0, "dup_seen": 0, "dup_run": 0}
+
     now = int(time.time())
     cutoff = now - cfg["max_hours"] * 3600
     collected = []
     for f in cfg["feeds"]:
         name = f.get("name", "")
+        per = stats["feeds"].setdefault(name, {"raw": 0, "kept": 0})
         for title, link, pub, cats in fetch_rss(
                 f.get("url", ""), cfg, f.get("max_items")):
+            per["raw"] += 1
             if not title or not category_ok(name, cats, cfg):
+                stats["dropped_category"] += 1
                 continue
             if not is_ai(title, name, cfg):
+                stats["dropped_keyword"] += 1
                 continue
+            per["kept"] += 1
             collected.append((title, name, parse_ts(pub), link))
 
     collected.sort(key=lambda x: x[2], reverse=True)
     fresh = [x for x in collected if x[2] >= cutoff]
+    stats["stale"] = len(collected) - len(fresh)
 
     out, now_add = [], int(time.time())
     new_known, new_titles = set(known), list(seen_titles)
     for title, source, ts, url in fresh:
         h = title_hash(title)
         if h in new_known or is_dup(title, new_titles):
+            # Две разные причины под одним `continue`, и путать их нельзя.
+            # «Уже показывали» — это норма, мера того, насколько окно ленты
+            # шире суточного объёма. «Повтор внутри прогона» — мера пересечения
+            # лент между собой, и вот её рост означает, что новая лента
+            # дублирует старую, а не добавляет к ней.
+            if h in known or is_dup(title, seen_titles):
+                stats["dup_seen"] += 1
+            else:
+                stats["dup_run"] += 1
             continue
         new_known.add(h)
         new_titles.append(title)
         date_s = time.strftime("%d.%m", time.gmtime(ts)) if ts else "?"
         out.append((title, source, date_s, url))
+    stats["candidates"] = len(out)
 
     if not out:
         print("(нет свежих новых новостей за окно)")
@@ -689,8 +734,9 @@ def main():
     # лучшее из верхушки по свежести — то есть решает не ту задачу. Квота
     # накладывается на уже отранжированное: она срезает лишнее у ленты, а не
     # мешает ранжировщику это лишнее увидеть.
-    pool = rank_pool(out[:cfg["max_pool"]], cfg)
-    pool = apply_source_quota(pool, cfg)
+    stats["pool"] = len(out[:cfg["max_pool"]])
+    pool = rank_pool(out[:cfg["max_pool"]], cfg, stats)
+    pool = apply_source_quota(pool, cfg, stats)
 
     # Обрезать ДО записи, а не после. Отметить прочитанным можно только то, что
     # уходит читателю: помеченный, но не напечатанный элемент не попадёт уже
@@ -731,6 +777,17 @@ def main():
         remember(cur, title, dry_run=args.dry_run, now_ts=now_add)
     if not args.dry_run:
         c.commit()
+
+    stats["printed"] = len(delivered)
+    stats["crawl"] = {"served": chain.served, "empty": chain.empty,
+                      "dead": sorted(chain.dead)}
+    stats["sources_printed"] = {}
+    for _t, src, _d, _u in delivered:
+        stats["sources_printed"][src] = stats["sources_printed"].get(src, 0) + 1
+    # Одной строкой и машиночитаемо: обёртка собирает из неё отчёт владельцу,
+    # а человеку в логе всё то же самое остаётся под рукой без второго формата.
+    # В stdout это класть нельзя — там материал для редактора и ничего больше.
+    warn("STATS-JSON " + json.dumps(stats, ensure_ascii=False, sort_keys=True))
 
     print("СТАТЬИ (заголовок | источник | дата | url):")
     for title, source, date_s, url in delivered:
