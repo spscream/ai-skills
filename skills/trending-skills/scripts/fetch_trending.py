@@ -115,6 +115,8 @@ def load_config(path):
     if path and os.path.isfile(path):
         try:
             import yaml
+            if ".." in path:
+                raise Exception("Invalid file path")
             cfg.update(yaml.safe_load(open(path)) or {})
         except Exception as e:
             # Раньше здесь был pass: опечатка в YAML откатывала конфиг к
