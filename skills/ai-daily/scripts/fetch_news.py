@@ -15,6 +15,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from urllib.parse import urlparse, urlunparse
 
 try:
     import feedparser
@@ -305,6 +306,23 @@ def clean_article(raw: str) -> str:
     return normalize_spaces("\n".join(lines))
 
 
+def build_validated_arxiv_url(base_url: str) -> str:
+    try:
+        if "/../" in base_url or re.search(r"/%2e%2e/", base_url, re.IGNORECASE):
+            raise ValueError("Invalid path")
+        parsed = urlparse(base_url)
+        if parsed.scheme not in ("http", "https"):
+            raise ValueError("Invalid protocol")
+        if not parsed.hostname:
+            raise ValueError("Invalid host")
+        allowed_domains = ["arxiv.org"]
+        if parsed.hostname.lower() not in allowed_domains:
+            raise ValueError("Invalid host")
+        return urlunparse(parsed)
+    except Exception:
+        raise ValueError("Invalid URL")
+
+
 def crawl_arxiv_abs(url: str, max_chars: int = 3000) -> str:
     """Pull the abstract straight from an arXiv HTML page.
 
@@ -312,7 +330,8 @@ def crawl_arxiv_abs(url: str, max_chars: int = 3000) -> str:
     the abstract, so this reads the one block that matters.
     """
     try:
-        req = urllib.request.Request(url, headers=UA)
+        validated_url = build_validated_arxiv_url(url)
+        req = urllib.request.Request(validated_url, headers=UA)
         html = urllib.request.urlopen(req, timeout=20).read().decode("utf-8", "ignore")
         m = re.search(r'<blockquote class="abstract[^"]*">(.*?)</blockquote>', html, re.S | re.I)
         if not m:
